@@ -67,11 +67,11 @@ button,.btn,.tab{min-height:42px;touch-action:manipulation}
    <h2>3. Визуализация и координаты</h2>
    <div class="visual">
     <div class="canvas"><svg id="drawing" viewBox="0 0 400 300" role="img" aria-label="Чертёж контура"><g stroke="#dfe5ec" stroke-width="1"><path d="M200 15V285M25 150H375" stroke-dasharray="4 4"/></g><text x="380" y="145" font-size="10" fill="#8491a1">X</text><text x="207" y="15" font-size="10" fill="#8491a1">C</text><circle cx="200" cy="150" r="3" fill="#167b65"/></svg></div>
-    <div><div class="stats"><div class="stat"><small>Число вершин</small><b id="vertexCount">4</b></div><div class="stat"><small>Радиус R</small><b id="radius">19.092 мм</b></div><div class="stat"><small>Угол шага</small><b id="step">90°</b></div><div class="stat"><small>Габарит S</small><b id="gauge">27 мм</b></div></div><div class="hint" style="margin-top:12px">Зелёная линия — номинальный контур детали; дуги окружности для лысок приближены короткими отрезками.</div></div>
+    <div><div class="stats"><div class="stat"><small>Число вершин</small><b id="vertexCount">4</b></div><div class="stat"><small>Радиус R</small><b id="radius">19.092 мм</b></div><div class="stat"><small>Угол шага</small><b id="step">90°</b></div><div class="stat"><small>Габарит S</small><b id="gauge">27 мм</b></div></div><div class="hint" style="margin-top:12px">Для лысок зелёными показаны только прямые поверхности; пунктир — исходная окружность заготовки.</div></div>
    </div>
    <div class="section"><h3>Таблица координат</h3><div class="tablewrap"><table><thead><tr><th>№</th><th>X, мм</th><th>C, мм</th><th>Угол</th></tr></thead><tbody id="coords"></tbody></table></div></div>
    <div class="section"><h3>Черновик программы</h3><div class="code" id="program">Нажмите «Рассчитать контур».</div><div class="actions"><button class="btn secondary" id="copy">Копировать программу</button><button class="btn secondary" id="download">Сохранить .nc</button></div></div>
-   <div class="warning"><b>Важно — перед запуском на станке:</b> здесь пока не реализованы коррекция G41/G42, расчёт траектории центра фрезы, многопроходная обработка, безопасные подводы/отводы и проверка станочных M-кодов. Прямоугольный паз имеет острые углы; дуги для лысок аппроксимируются линейными сегментами G1. Не загружайте этот черновик в станок для обработки. Сверьте формат G112/G113, систему X/C и последовательность режимов с документацией производителя и проверенной рабочей программой.</div>
+   <div class="warning"><b>Важно — перед запуском на станке:</b> здесь пока не реализованы коррекция G41/G42, расчёт траектории центра фрезы, многопроходная обработка, безопасные подводы/отводы и проверка станочных M-кодов. Для одной и двух лысок отображаются только прямые поверхности; исполняемый G-код намеренно не формируется до проверки безопасного входа/выхода и G41 на вашем станке. Не загружайте черновики в станок для обработки. Сверьте формат G112/G113, систему X/C и последовательность режимов с документацией производителя и проверенной рабочей программой.</div>
   </section>
  </div>
  <div class="footer">Работает локально в браузере. Введённые значения не отправляются в интернет.</div>
@@ -99,7 +99,7 @@ function num(id){return Number($(id)?.value)}
 function rotate(x,y,deg){const a=deg*Math.PI/180;return {x:x*Math.cos(a)-y*Math.sin(a),y:x*Math.sin(a)+y*Math.cos(a)}}
 function makePoints(){
  const cx=num('centerX')||0,cc=num('centerC')||0,ang=num('angle')||0,dir=$('direction').value==='cw'?-1:1;
- let local=[],R=null,step=null,dimension='';
+ let local=[],segments=[],R=null,step=null,dimension='',flatMode=false;
  if(['square','hex','oct'].includes(shape)){
   const n={square:4,hex:6,oct:8}[shape],S=num('size');if(!(S>0))throw Error('Введите размер S больше нуля.');
   R=S/(2*Math.cos(Math.PI/n));step=360/n;dimension=fmt(S)+' мм';
@@ -111,42 +111,49 @@ function makePoints(){
   local=corners.map(([x,y],i)=>{const q=rotate(x,y,ang);return {...q,a:i*90};});
   if(dir<0)local.reverse();R=Math.hypot(w/2,h/2);dimension=fmt(w)+' × '+fmt(h)+' мм';
  }else{
+  flatMode=true;
   const D=num('diameter');if(!(D>0))throw Error('Введите диаметр больше нуля.');const r=D/2;
-  let h=shape==='oneflat'?num('flat'):num('across')/2;
+  const h=shape==='oneflat'?num('flat'):num('across')/2;
   if(!(h>=0&&h<r))throw Error('Расстояние до лыски должно быть меньше радиуса окружности.');
   if(shape==='oneflat'&&h===0)throw Error('Лыска не должна проходить через центр окружности.');
   if(shape==='twoflat'&&!(num('across')>0))throw Error('Расстояние между лыскими должно быть больше нуля.');
-  const beta=Math.acos(h/r),b=beta*180/Math.PI,N=48;
-  const onCircle=a=>{const t=a*Math.PI/180;return {x:r*Math.cos(t),y:r*Math.sin(t),a:(a+3600)%360};};
-  if(shape==='oneflat'){
-   // Одна хорда и большая дуга окружности.
-   for(let i=0;i<=N;i++)local.push(onCircle(ang+b+(360-2*b)*i/N));
-  }else{
-   // Две противоположные хорды и две дуги окружности.
-   for(let i=0;i<=N/2;i++)local.push(onCircle(ang+b+(180-2*b)*i/(N/2)));
-   for(let i=0;i<=N/2;i++)local.push(onCircle(ang+180+b+(180-2*b)*i/(N/2)));
-  }
-  if(dir<0)local.reverse();R=r;dimension=shape==='oneflat'?`D ${fmt(D)} / h ${fmt(h)} мм`:`D ${fmt(D)} / между лыскими ${fmt(num('across'))} мм`;
+  const beta=Math.acos(h/r)*180/Math.PI;
+  const point=a=>{const t=a*Math.PI/180;return {x:r*Math.cos(t),y:r*Math.sin(t),a:(a+3600)%360};};
+  const first=[point(ang-beta),point(ang+beta)];segments.push(dir<0?[...first].reverse():first);
+  if(shape==='twoflat'){const second=[point(ang+180-beta),point(ang+180+beta)];segments.push(dir<0?[...second].reverse():second);}
+  local=segments.flat();R=r;dimension=shape==='oneflat'?`D ${fmt(D)} / h ${fmt(h)} мм`:`D ${fmt(D)} / между лыскими ${fmt(num('across'))} мм`;
  }
- const pts=local.map(p=>{const q=rotate(p.x,p.y,0);return {X:cx+2*q.x,C:cc+q.y,a:p.a};});
- return {pts,R,step,dimension};
+ const convert=p=>({X:cx+2*p.x,C:cc+p.y,a:p.a});
+ return {pts:local.map(convert),R,step,dimension,flatMode,segments:segments.map(seg=>seg.map(convert))};
 }
 function calculate(){
  try{
-  const {pts,R,step,dimension}=makePoints();lastPoints=pts;
-  $('vertexCount').textContent=pts.length;$('radius').textContent=R===null?'—':fmt(R)+' мм';$('step').textContent=step===null?'—':step+'°';$('gauge').textContent=dimension;
-  $('coords').innerHTML=pts.map((p,i)=>`<tr><td>${i+1}</td><td>${fmt(p.X)}</td><td>${fmt(p.C)}</td><td>${fmt(p.a)}°</td></tr>`).join('');draw(pts);
+  const {pts,R,step,dimension,flatMode,segments}=makePoints();lastPoints=pts;
+  $('vertexCount').previousElementSibling.textContent=flatMode?'Число проходов':'Число вершин';$('vertexCount').textContent=flatMode?String(segments.length):String(pts.length);$('radius').textContent=R===null?'—':fmt(R)+' мм';$('step').textContent=step===null?'—':step+'°';$('gauge').textContent=dimension;
+  $('coords').innerHTML=pts.map((p,i)=>`<tr><td>${flatMode?'Л'+(Math.floor(i/2)+1)+'-'+(i%2+1):i+1}</td><td>${fmt(p.X)}</td><td>${fmt(p.C)}</td><td>${fmt(p.a)}°</td></tr>`).join('');draw(pts,flatMode,segments);
   const z=num('depth'),f=num('feed'),rpm=num('rpm'),tool=$('tool').value.trim()||'1010',safeX=num('safeX'),az=num('approachZ');
   let lines=['(GEOMETRY DRAFT - VERIFY BEFORE USE)',`(SHAPE: ${names[shape]})`,'(ASSUMED G112: X=2*x, C=y)'];
-  if(shape==='oneflat'||shape==='twoflat')lines.push('(CIRCULAR ARCS APPROXIMATED BY SHORT G1 SEGMENTS)');
-  if(shape==='slot')lines.push('(RECTANGULAR SLOT WITH SHARP CORNERS)');
-  lines.push('G98',`T${tool}`,`M13 P2 S${rpm}`,`G0 X${fmt(safeX)}`,`G0 Z${fmt(az)}`,`G1 Z${fmt(z)} F${fmt(f)}`,'G112',`G1 X${fmt(pts[0].X)} C${fmt(pts[0].C)} F${fmt(f)}`);
-  for(let i=1;i<pts.length;i++)lines.push(`G1 X${fmt(pts[i].X)} C${fmt(pts[i].C)}`);
-  lines.push(`G1 X${fmt(pts[0].X)} C${fmt(pts[0].C)}`,'G113','(RETRACT / STOP / COOLANT: MACHINE-SPECIFIC)','M5','M30');
+  if(flatMode){
+   lines.push('(FLAT GEOMETRY ONLY - NO MACHINE G-CODE GENERATED)','(Only straight flat segments are listed; no circular contour is traversed.)','(Lead-in, lead-out, G41/G42 and safe transitions require machine-specific verification.)');
+   segments.forEach((seg,i)=>lines.push(`(FLAT ${i+1}: START X${fmt(seg[0].X)} C${fmt(seg[0].C)} -> END X${fmt(seg[1].X)} C${fmt(seg[1].C)})`));
+   lines.push('(DO NOT RUN: executable code is intentionally withheld pending a verified flat-milling example.)');
+  }else{
+   if(shape==='slot')lines.push('(RECTANGULAR SLOT WITH SHARP CORNERS)');
+   lines.push('G98',`T${tool}`,`M13 P2 S${rpm}`,`G0 X${fmt(safeX)}`,`G0 Z${fmt(az)}`,`G1 Z${fmt(z)} F${fmt(f)}`,'G112',`G1 X${fmt(pts[0].X)} C${fmt(pts[0].C)} F${fmt(f)}`);
+   for(let i=1;i<pts.length;i++)lines.push(`G1 X${fmt(pts[i].X)} C${fmt(pts[i].C)}`);
+   lines.push(`G1 X${fmt(pts[0].X)} C${fmt(pts[0].C)}`,'G113','(RETRACT / STOP / COOLANT: MACHINE-SPECIFIC)','M5','M30');
+  }
   lastProgram=lines.join('\n');$('program').textContent=lastProgram;
  }catch(e){lastProgram='';$('program').textContent=e.message;$('coords').innerHTML='';$('vertexCount').textContent='—';$('radius').textContent='—';$('step').textContent='—';$('gauge').textContent='—';$('drawing').innerHTML='<g stroke="#dfe5ec"><path d="M200 15V285M25 150H375" stroke-dasharray="4 4"/></g><text x="200" y="150" text-anchor="middle" fill="#b54708" font-size="13">Проверьте размеры</text>';}
 }
-function draw(pts){const svg=$('drawing'),cx=200,cy=150;const mx=Math.max(1,...pts.map(p=>Math.abs(p.X/2))),my=Math.max(1,...pts.map(p=>Math.abs(p.C)));const scale=Math.min(115/mx,115/my,5);const xy=pts.map(p=>[cx+p.X/2*scale,cy-p.C*scale]);const d=xy.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ')+' Z';svg.innerHTML=`<g stroke="#dfe5ec" stroke-width="1"><path d="M200 15V285M25 150H375" stroke-dasharray="4 4"/></g><text x="380" y="145" font-size="10" fill="#8491a1">X</text><text x="207" y="15" font-size="10" fill="#8491a1">C</text><path d="${d}" fill="#dff5ed" stroke="#16856b" stroke-width="2.5" stroke-linejoin="round"/><circle cx="200" cy="150" r="2.5" fill="#344054"/>`;
+function draw(pts,flatMode=false,segments=[]){
+ const svg=$('drawing'),cx=200,cy=150,mx=Math.max(1,...pts.map(p=>Math.abs(p.X/2))),my=Math.max(1,...pts.map(p=>Math.abs(p.C))),scale=Math.min(115/mx,115/my,5),xy=p=>[cx+p.X/2*scale,cy-p.C*scale];let content='';
+ if(flatMode){
+  const r=num('diameter')/2,cx0=num('centerX')||0,cc0=num('centerC')||0;
+  content+=`<circle cx="${cx+cx0*scale}" cy="${cy-cc0*scale}" r="${r*scale}" fill="#f4f6f8" stroke="#aab5c2" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+  for(const seg of segments){const a=xy(seg[0]),b=xy(seg[1]);content+=`<path d="M${a[0].toFixed(1)} ${a[1].toFixed(1)} L${b[0].toFixed(1)} ${b[1].toFixed(1)}" fill="none" stroke="#16856b" stroke-width="4" stroke-linecap="round"/>`;}
+ }else{const q=pts.map(xy),d=q.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ')+' Z';content+=`<path d="${d}" fill="#dff5ed" stroke="#16856b" stroke-width="2.5" stroke-linejoin="round"/>`;}
+ svg.innerHTML=`<g stroke="#dfe5ec" stroke-width="1"><path d="M200 15V285M25 150H375" stroke-dasharray="4 4"/></g><text x="380" y="145" font-size="10" fill="#8491a1">X</text><text x="207" y="15" font-size="10" fill="#8491a1">C</text>${content}<circle cx="200" cy="150" r="2.5" fill="#344054"/>`;
 }
 $('copy').addEventListener('click',async()=>{if(!lastProgram)return;try{await navigator.clipboard.writeText(lastProgram);$('copy').textContent='Скопировано';setTimeout(()=>$('copy').textContent='Копировать программу',1500)}catch(e){alert('Не удалось скопировать. Выделите текст программы вручную.')}});
 $('download').addEventListener('click',()=>{if(!lastProgram)return;const blob=new Blob([lastProgram],{type:'text/plain;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='G112_draft.nc';a.click();URL.revokeObjectURL(a.href)});
